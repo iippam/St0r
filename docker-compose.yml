@@ -1,0 +1,84 @@
+version: '3.8'
+
+services:
+  # MariaDB Database
+  db:
+    image: mariadb:11.3-alpine
+    container_name: st0r-db
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-rootpass123}
+      MYSQL_DATABASE: ${DB_NAME:-urbackup_gui}
+      MYSQL_USER: ${DB_USER:-urbackup}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-urbackup123}
+    volumes:
+      - db_data:/var/lib/mysql
+      - ./database/init/01_schema.sql:/docker-entrypoint-initdb.d/01_schema.sql
+      - ./database/migrations:/docker-entrypoint-initdb.d/migrations
+    ports:
+      - "3306:3306"
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - st0r-network
+    restart: unless-stopped
+
+  # Backend API
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: st0r-backend
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      NODE_ENV: ${NODE_ENV:-production}
+      PORT: 3000
+      DB_HOST: db
+      DB_PORT: 3306
+      DB_NAME: ${DB_NAME:-urbackup_gui}
+      DB_USER: ${DB_USER:-urbackup}
+      DB_PASSWORD: ${DB_PASSWORD:-urbackup123}
+      JWT_SECRET: ${JWT_SECRET:-changeme-jwt-secret-32-chars-min}
+      APP_SECRET_KEY: ${APP_SECRET_KEY:-changeme-app-secret-32-chars-min}
+      URBACKUP_DB_PATH: /urbackup/backup_server.db
+      URBACKUP_API_URL: ${URBACKUP_API_URL:-http://localhost:55414/x}
+      URBACKUP_USERNAME: ${URBACKUP_USERNAME:-admin}
+      URBACKUP_PASSWORD: ${URBACKUP_PASSWORD:-}
+    volumes:
+      - /var/urbackup:/urbackup:ro
+    ports:
+      - "3000:3000"
+    networks:
+      - st0r-network
+    restart: unless-stopped
+    depends_on:
+      - db
+
+  # Frontend UI
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: st0r-frontend
+    depends_on:
+      - backend
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./certs:/etc/nginx/certs:ro
+    networks:
+      - st0r-network
+    restart: unless-stopped
+
+volumes:
+  db_data:
+    driver: local
+
+networks:
+  st0r-network:
+    driver: bridge
